@@ -4,13 +4,13 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <algorithm>
 
-static int dropCount = 20000;
+static int dropCount = 2000;
+static int backgroundCount = 100;
 
-// 1️⃣ Create a random device (true entropy seed)
 std::random_device rd;
 
-// 2️⃣ Create a random number generator, seeded with rd
 std::mt19937 gen(rd());
 
 std::uniform_real_distribution<> dis(-1.0, 1.0);
@@ -47,6 +47,43 @@ void main()
 }
 )";
 
+struct rectBackground
+{
+    float x,y;
+    float vx,vy;
+    float r,g,b;
+};
+
+std::vector<std::vector<rectBackground>> getBackground(int count) {
+    std::vector<std::vector<rectBackground>> background(count, std::vector<rectBackground>(count));
+
+    for (int i = 0; i < count; ++i) {
+        for (int j = 0; j < count; ++j) {
+            background[i][j].x  = (float)i / (float)count * 2.0f - 1.0f;
+            background[i][j].y  = (float)j / (float)count * 2.0f - 1.0f;
+            background[i][j].vx = (float)dis(gen) * 0.01f;
+            background[i][j].vy = ((float)dis(gen) - .5) * 0.01f;
+            background[i][j].r  = (float)dis(gen);
+            background[i][j].g  = (float)dis(gen);
+            background[i][j].b  = (float)dis(gen);
+        }
+    }
+
+    return background;
+}
+
+
+void addBackgroundVariation(const std::vector<std::vector<rectBackground>>& background, float *vx, float *vy, float x, float y, int count) {
+    int i = (int)floor((x + 1.0f) / 2.0f * count);
+    int j = (int)floor((y + 1.0f) / 2.0f * count);
+
+    i = std::clamp(i, 0, count - 1);
+    j = std::clamp(j, 0, count - 1);
+
+    *vx = *vx + background[i][j].vx;
+    *vy = *vy + background[i][j].vy;
+}
+
 struct Drop
 {
     float x,y;
@@ -57,18 +94,25 @@ struct Drop
 
 struct DropInstance
 {
-        float x,y;
-        float radius;
-        float r,g,b;
+    float x,y;
+    float radius;
+    float r,g,b;
 };
 
-void updateDrop(Drop &d, float time)
+void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, float time)
 {
+    addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
+
     d.x += d.vx * time;
     d.y += d.vy * time;
 
     if(d.x > 1.0f || d.x < -1.0f) d.x = -d.x;
-    if(d.y < -1.0f) d.y = -d.y;
+    if(d.y < -1.0f) {
+        d.vx = std::clamp(d.vx, -1.0f, 1.0f);
+        d.vy = std::clamp(d.vy, -1.0f, 1.0f);
+
+        d.y = -d.y;
+    }
 }
 
 void drawSquare(float x, float y, float size, float r, float g, float b)
@@ -238,6 +282,9 @@ int main(void)
     glBindBuffer(GL_ARRAY_BUFFER, circleVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(circleVerts), circleVerts, GL_STATIC_DRAW);
 
+    // Initialize background squares
+    const std::vector<std::vector<rectBackground>> background = getBackground(backgroundCount);
+
     struct Drop *drops = (struct Drop *) malloc(sizeof(Drop) * dropCount);
 
     for(int i = 0; i < dropCount; ++i) {
@@ -286,7 +333,7 @@ int main(void)
 
         for (int i = 0; i < dropCount; ++i) {
             std::chrono::duration<float> curElapsed = std::chrono::high_resolution_clock::now() - frameStart;
-            updateDrop(drops[i], (float) curElapsed.count());
+            updateDrop(drops[i], background, (float) curElapsed.count());
 
             dropInstances[i] = {drops[i].x, drops[i].y, drops[i].radius, drops[i].r, drops[i].g, drops[i].b};
             // drawCircle(drops[i].x, drops[i].y, drops[i].radius, drops[i].r, drops[i].g, drops[i].b);
