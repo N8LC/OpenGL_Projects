@@ -5,9 +5,10 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <cstdint>
 
-static int dropCount = 2000;
-static int backgroundCount = 1000;
+static int dropCount = 3000;
+static int backgroundCount = 20;
 
 std::random_device rd;
 
@@ -59,6 +60,111 @@ struct BackgroundInstance {
     float r, g, b;
 };
 
+// Vibe Coded helper function
+static double HueToRGB(double p, double q, double t) {
+    if (t < 0.0) t += 1.0;
+    if (t > 1.0) t -= 1.0;
+
+    if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
+    if (t < 1.0 / 2.0) return q;
+    if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    return p;
+}
+
+// Vibe coded hls to rgb converter
+void HLStoRGB(double h, double l, double s,
+              double &r, double &g, double &b) {
+
+    if (s == 0.0) {
+        // Achromatic: gray, no scaling needed
+        r = g = b = l;
+        return;
+    }
+
+    h /= 360.0;
+
+    double q = (l < 0.5) ? l * (1.0 + s) : l + s - l * s;
+    double p = 2.0 * l - q;
+
+    r = HueToRGB(p, q, h + 1.0 / 3.0);
+    g = HueToRGB(p, q, h);
+    b = HueToRGB(p, q, h - 1.0 / 3.0);
+}
+
+void assignVeloctyVectors(std::vector<std::vector<rectBackground>> &background, int i, int j) {
+    auto &cell = background[i][j];
+
+    float startVelocityScale = 0.003f;
+    float neighborInfluenceScale = 0.0015f;
+
+
+    if (i == 0 && j == 0) {
+        cell.vx = (float)dis(gen) * startVelocityScale;
+        cell.vy = ((float)dis(gen) - .5) * startVelocityScale;
+    } else if (i == 0) {
+        auto &leftCell = background[i][j-1];
+        cell.vx = std::clamp(leftCell.vx + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+        cell.vy = std::clamp(leftCell.vy + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+    } else if (j == 0) {
+        auto &topCell = background[i-1][j];
+        cell.vx = std::clamp(topCell.vx + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+        cell.vy = std::clamp(topCell.vy + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+    } else {
+        auto &leftCell = background[i][j-1];
+        auto &topCell = background[i-1][j];
+        cell.vx = std::clamp(((topCell.vx + leftCell.vx) / 2.0f) + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+        cell.vy = std::clamp(((topCell.vy + leftCell.vy) / 2.0f) + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+    }
+}
+
+void blurVelocityVectors(std::vector<std::vector<rectBackground>> &background, int i, int j) {
+    auto &cell = background[i][j];
+    float sumVx = 0.0f, sumVy = 0.0f;
+    float outOfBoundsCount = 0.0f;
+    float numTotalParts = 18.0f;
+
+    for (int di = -1; di <= 1; ++di) {
+        for (int dj = -1; dj <= 1; ++dj) {
+            int ni = i + di, nj = j + dj;
+
+            bool isCenter = (di == 0 && dj == 0);
+            bool isBottomRight = (di >= 0 && dj >= 0);
+            float multi  = isCenter ? 4.0/numTotalParts : (isBottomRight ? 3.0/numTotalParts : 1.0/numTotalParts);
+
+            if (ni >= 0 && ni < background.size() && nj >= 0 && nj < background[0].size()) {
+                sumVx += background[ni][nj].vx * multi;
+                sumVy += background[ni][nj].vy * multi;
+            } else {
+                outOfBoundsCount += multi * numTotalParts; // Each missing neighbor would have contributed 1/16th to the sum
+            }
+        }
+    }
+
+    // If there are out of bounds neighbors, we need to scale up the sum to account for the missing contributions
+    if (outOfBoundsCount > 0) {
+        sumVx *= (numTotalParts / (numTotalParts - outOfBoundsCount));
+        sumVy *= (numTotalParts / (numTotalParts - outOfBoundsCount));       
+    }
+
+    background[i][j].vx = sumVx;
+    background[i][j].vy = sumVy;
+}
+
+// CALL THIS FUNCTION AFTER ASSIGNING VELOCITY VECTORS TO ENSURE COLOR VARIATION FOLLOWS VELOCITY VARIATION
+void assignColors(std::vector<std::vector<rectBackground>> &background, int i, int j) {
+    auto &cell = background[i][j];
+    double r,g,b;
+    
+    double speed = sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
+    double hue = fmod((atan2(cell.vy, cell.vx) * 180.0 / 3.14159265) + 360.0, 360.0);
+    double lightness = std::clamp(0.5, 0.0, 1.0); // Adjust multiplier for more/less contrast
+    double saturation = std::clamp(speed*20.0, 0.0, 1.0); // Fixed saturation for vibrant colors
+    HLStoRGB(hue, lightness, saturation, r, g, b);
+    cell.r = (float)r;
+    cell.g = (float)g;
+    cell.b = (float)b;
+}
+
 std::vector<std::vector<rectBackground>> getBackground(int count) {
     std::vector<std::vector<rectBackground>> background(count, std::vector<rectBackground>(count));
 
@@ -66,11 +172,17 @@ std::vector<std::vector<rectBackground>> getBackground(int count) {
         for (int j = 0; j < count; ++j) {
             background[i][j].x  = (float)i / (float)count * 2.0f - 1.0f;
             background[i][j].y  = (float)j / (float)count * 2.0f - 1.0f;
-            background[i][j].vx = (float)dis(gen) * 0.01f;
-            background[i][j].vy = ((float)dis(gen) - .5) * 0.01f;
-            background[i][j].r  = ((float)dis(gen) + 1.0f) / 2.0f;
-            background[i][j].g  = ((float)dis(gen) + 1.0f) / 2.0f;
-            background[i][j].b  = ((float)dis(gen) + 1.0f) / 2.0f;
+            // Assign Velocity Vectors
+            assignVeloctyVectors(background, i, j);
+        }
+    }
+
+    for (int i = 0; i < count; ++i) {
+        for (int j = 0; j < count; ++j) {
+            blurVelocityVectors(background, i, j);
+
+            // Assign Colors 
+            assignColors(background, i, j);
         }
     }
 
@@ -111,58 +223,14 @@ void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& backgro
     d.x += d.vx * time;
     d.y += d.vy * time;
 
-    if(d.x > 1.0f || d.x < -1.0f) d.x = -d.x;
-    if(d.y < -1.0f) {
-        d.vx = std::clamp(d.vx, -1.0f, 1.0f);
-        d.vy = std::clamp(d.vy, -1.0f, 1.0f);
+    if ((d.x > 1.0f || d.x < -1.0f) || (d.y < -1.0f || d.y > 1.1f)) { 
+        d.vx = 0.0f;
+        d.vy = -0.7f,
 
-        d.y = -d.y;
+        d.x = dis(gen);
+        d.y = 1.0f; 
     }
 }
-
-void drawSquare(float x, float y, float size, float r, float g, float b)
-{
-    float half = size / 2.0f;
-    float square_verts[] = {
-        x - half, y - half,
-        x + half, y - half,
-        x + half, y + half,
-        x + half, y + half,
-        x - half, y + half,
-        x - half, y - half
-    };
-
-    glColor3f(r, g, b);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(2, GL_FLOAT, 0, square_verts);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glDisableClientState(GL_VERTEX_ARRAY);
-}
-
-void drawCircle(float x, float y, float size, float r, float g, float b)
-{
-    float half = size / 2.0f;
-    float oneOverSqrtPI = 1.0f / sqrt(3.14159265f);
-    float circle_verts[] = {
-        x, y,
-        x - (half * oneOverSqrtPI), y - (half * oneOverSqrtPI),
-        x - half, y,
-        x - (half * oneOverSqrtPI), y + (half * oneOverSqrtPI),
-        x, y + half,
-        x + (half * oneOverSqrtPI), y + (half * oneOverSqrtPI),
-        x + half, y,
-        x + (half * oneOverSqrtPI), y - (half * oneOverSqrtPI),
-        x, y - half,
-        x - (half * oneOverSqrtPI), y - (half * oneOverSqrtPI),
-    };
-
-    glColor3f(r, g, b);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(2, GL_FLOAT, 0, circle_verts);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, 10);
-    glDisableClientState(GL_VERTEX_ARRAY);
-}
-
 
 float vertices[] = {
     -0.5f, -0.5f, 0.0f,
@@ -360,9 +428,9 @@ int main(void)
     std::vector<Drop> drops(dropCount);
 
     for(int i = 0; i < dropCount; ++i) {
-        drops[i] = {(float)dis(gen), (float)dis(gen) + 2.0f, 
-                    ((float)dis(gen)) * 0.3f, 
-                    -0.7f + ((float)dis(gen)) * 0.1f,
+        drops[i] = {(float)dis(gen), 1.0f, 
+                    0.0f, 
+                    -0.7f ,
                     0.005f + ((float)dis(gen)) * 0.001f,
                     1.0f, 1.0f, 1.0f};
     }
@@ -408,7 +476,6 @@ int main(void)
             updateDrop(drops[i], background, (float) curElapsed.count());
 
             dropInstances[i] = {drops[i].x, drops[i].y, drops[i].radius, drops[i].r, drops[i].g, drops[i].b};
-            // drawCircle(drops[i].x, drops[i].y, drops[i].radius, drops[i].r, drops[i].g, drops[i].b);
         }
 
         // Draw Background squares first
