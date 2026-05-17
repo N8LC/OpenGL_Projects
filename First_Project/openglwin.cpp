@@ -9,6 +9,7 @@
 
 static int dropCount = 3000;
 static int backgroundCount = 20;
+static float gravityStrength = 0.0005f; // Adjust for stronger/weaker gravity
 
 std::random_device rd;
 
@@ -100,7 +101,7 @@ void assignVeloctyVectors(std::vector<std::vector<rectBackground>> &background, 
 
     if (i == 0 && j == 0) {
         cell.vx = (float)dis(gen) * startVelocityScale;
-        cell.vy = ((float)dis(gen) - .5) * startVelocityScale;
+        cell.vy = ((float)dis(gen) ) * startVelocityScale;
     } else if (i == 0) {
         auto &leftCell = background[i][j-1];
         cell.vx = std::clamp(leftCell.vx + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
@@ -201,6 +202,10 @@ void addBackgroundVariation(const std::vector<std::vector<rectBackground>>& back
     *vy = *vy + background[i][j].vy;
 }
 
+void addGravity(float *vx, float *vy, float time) {
+    *vy -= gravityStrength * time;
+}
+
 struct Drop
 {
     float x,y;
@@ -219,13 +224,14 @@ struct DropInstance
 void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, float time)
 {
     addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
+    addGravity(&d.vx, &d.vy, time);
 
     d.x += d.vx * time;
     d.y += d.vy * time;
 
     if ((d.x > 1.0f || d.x < -1.0f) || (d.y < -1.0f || d.y > 1.1f)) { 
         d.vx = 0.0f;
-        d.vy = -0.7f,
+        d.vy = 0.0f,
 
         d.x = dis(gen);
         d.y = 1.0f; 
@@ -460,6 +466,7 @@ int main(void)
     glEnableVertexAttribArray(3);
     glVertexAttribDivisor(3, 1);
 
+    auto lastFrameStart = std::chrono::high_resolution_clock::now();
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(window))
@@ -471,9 +478,12 @@ int main(void)
         /* Render here */
         glClear(GL_COLOR_BUFFER_BIT);
 
+        std::chrono::duration<float> elapsed = frameStart - lastFrameStart;
+        float dt = elapsed.count();
+        lastFrameStart = frameStart;
+
         for (int i = 0; i < dropCount; ++i) {
-            std::chrono::duration<float> curElapsed = std::chrono::high_resolution_clock::now() - frameStart;
-            updateDrop(drops[i], background, (float) curElapsed.count());
+            updateDrop(drops[i], background, (float) dt);
 
             dropInstances[i] = {drops[i].x, drops[i].y, drops[i].radius, drops[i].r, drops[i].g, drops[i].b};
         }
