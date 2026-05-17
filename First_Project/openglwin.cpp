@@ -7,9 +7,12 @@
 #include <algorithm>
 #include <cstdint>
 
-static int dropCount = 3000;
-static int backgroundCount = 20;
-static float gravityStrength = 0.0005f; // Adjust for stronger/weaker gravity
+static int dropCount = 20000;
+static int backgroundCount = 100;
+static float gravityStrength = 0.001f; // Adjust for stronger/weaker gravity
+static float backgroundStrength = 0.001f; // Adjust for stronger/weaker background influence
+static float contrastMultiplier = 50.0f; // Adjust for more/less contrast in background colors
+static float neighborInfluenceScale = 0.0003f;
 
 std::random_device rd;
 
@@ -96,7 +99,6 @@ void assignVeloctyVectors(std::vector<std::vector<rectBackground>> &background, 
     auto &cell = background[i][j];
 
     float startVelocityScale = 0.003f;
-    float neighborInfluenceScale = 0.0015f;
 
 
     if (i == 0 && j == 0) {
@@ -104,17 +106,17 @@ void assignVeloctyVectors(std::vector<std::vector<rectBackground>> &background, 
         cell.vy = ((float)dis(gen) ) * startVelocityScale;
     } else if (i == 0) {
         auto &leftCell = background[i][j-1];
-        cell.vx = std::clamp(leftCell.vx + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
-        cell.vy = std::clamp(leftCell.vy + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+        cell.vx = std::clamp(leftCell.vx + ((float)dis(gen) * neighborInfluenceScale), -backgroundStrength, backgroundStrength);
+        cell.vy = std::clamp(leftCell.vy + ((float)dis(gen) * neighborInfluenceScale), -backgroundStrength, backgroundStrength);
     } else if (j == 0) {
         auto &topCell = background[i-1][j];
-        cell.vx = std::clamp(topCell.vx + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
-        cell.vy = std::clamp(topCell.vy + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+        cell.vx = std::clamp(topCell.vx + ((float)dis(gen) * neighborInfluenceScale), -backgroundStrength, backgroundStrength);
+        cell.vy = std::clamp(topCell.vy + ((float)dis(gen) * neighborInfluenceScale), -backgroundStrength, backgroundStrength);
     } else {
         auto &leftCell = background[i][j-1];
         auto &topCell = background[i-1][j];
-        cell.vx = std::clamp(((topCell.vx + leftCell.vx) / 2.0f) + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
-        cell.vy = std::clamp(((topCell.vy + leftCell.vy) / 2.0f) + ((float)dis(gen) * neighborInfluenceScale), -0.01f, 0.01f);
+        cell.vx = std::clamp(((topCell.vx + leftCell.vx) / 2.0f) + ((float)dis(gen) * neighborInfluenceScale), -backgroundStrength, backgroundStrength);
+        cell.vy = std::clamp(((topCell.vy + leftCell.vy) / 2.0f) + ((float)dis(gen) * neighborInfluenceScale), -backgroundStrength, backgroundStrength);
     }
 }
 
@@ -159,7 +161,7 @@ void assignColors(std::vector<std::vector<rectBackground>> &background, int i, i
     double speed = sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
     double hue = fmod((atan2(cell.vy, cell.vx) * 180.0 / 3.14159265) + 360.0, 360.0);
     double lightness = std::clamp(0.5, 0.0, 1.0); // Adjust multiplier for more/less contrast
-    double saturation = std::clamp(speed*20.0, 0.0, 1.0); // Fixed saturation for vibrant colors
+    double saturation = std::clamp(speed*contrastMultiplier, 0.0, 1.0); // Fixed saturation for vibrant colors
     HLStoRGB(hue, lightness, saturation, r, g, b);
     cell.r = (float)r;
     cell.g = (float)g;
@@ -244,8 +246,80 @@ float vertices[] = {
      0.0f,  0.5f, 0.0f
 };  
 
-void processInput(GLFWwindow *window)
+void displayBackground(const std::vector<std::vector<rectBackground>>& background, GLuint VAO, GLuint& bgVAO, GLuint& bgQuadVBO, GLuint& bgInstanceVBO, int& bgTotal) {
+    float quadVerts[] = {
+        -0.5f, -0.5f,
+        0.5f, -0.5f,
+        0.5f,  0.5f,
+        0.5f,  0.5f,
+        -0.5f,  0.5f,
+        -0.5f, -0.5f,
+    };
+
+    bgTotal = backgroundCount * backgroundCount;
+
+    glGenVertexArrays(1, &bgVAO);
+    glBindVertexArray(bgVAO);
+
+    // Shape geometry
+    glGenBuffers(1, &bgQuadVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, bgQuadVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+
+    // Instance data
+    glGenBuffers(1, &bgInstanceVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, bgInstanceVBO);
+    glBufferData(GL_ARRAY_BUFFER, bgTotal * sizeof(BackgroundInstance), nullptr, GL_DYNAMIC_DRAW);
+
+    // x, y
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(BackgroundInstance), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribDivisor(1, 1);
+
+    // size (reusing iRadius slot)
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(BackgroundInstance), (void*)8);
+    glEnableVertexAttribArray(2);
+    glVertexAttribDivisor(2, 1);
+
+    // r, g, b
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(BackgroundInstance), (void*)12);
+    glEnableVertexAttribArray(3);
+    glVertexAttribDivisor(3, 1);
+
+    glBindVertexArray(0);
+
+    float cellSize = 2.0f / backgroundCount;
+    std::vector<BackgroundInstance> bgInstances;
+    bgInstances.reserve(bgTotal);
+
+    float halfCell = cellSize / 2.0f;
+
+    for (int i = 0; i < backgroundCount; ++i)
+        for (int j = 0; j < backgroundCount; ++j)
+            bgInstances.push_back({
+                background[i][j].x + halfCell, 
+                background[i][j].y + halfCell,
+                cellSize,
+                background[i][j].r,
+                background[i][j].g,
+                background[i][j].b
+            });
+
+    glBindVertexArray(VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, bgInstanceVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, bgInstances.size() * sizeof(BackgroundInstance), bgInstances.data());
+}
+
+void processInput(GLFWwindow *window, std::vector<std::vector<rectBackground>>& background, GLuint VAO, GLuint& bgVAO, GLuint& bgQuadVBO, GLuint& bgInstanceVBO, int& bgTotal)
 {
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+        background = getBackground(backgroundCount);
+        displayBackground(background, VAO, bgVAO, bgQuadVBO, bgInstanceVBO, bgTotal);
+    }
+
     if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 }
@@ -357,74 +431,13 @@ int main(void)
         invAspect,     0.0f,
     };
 
-    float quadVerts[] = {
-        -0.5f, -0.5f,
-        0.5f, -0.5f,
-        0.5f,  0.5f,
-        0.5f,  0.5f,
-        -0.5f,  0.5f,
-        -0.5f, -0.5f,
-    };
-
     // Initialize background squares
-    const std::vector<std::vector<rectBackground>> background = getBackground(backgroundCount);
+    std::vector<std::vector<rectBackground>> background = getBackground(backgroundCount);
 
     GLuint bgVAO, bgQuadVBO, bgInstanceVBO;
-    int bgTotal = backgroundCount * backgroundCount;
+    int bgTotal;
 
-    glGenVertexArrays(1, &bgVAO);
-    glBindVertexArray(bgVAO);
-
-    // Shape geometry
-    glGenBuffers(1, &bgQuadVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, bgQuadVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-    glEnableVertexAttribArray(0);
-
-    // Instance data
-    glGenBuffers(1, &bgInstanceVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, bgInstanceVBO);
-    glBufferData(GL_ARRAY_BUFFER, bgTotal * sizeof(BackgroundInstance), nullptr, GL_DYNAMIC_DRAW);
-
-    // x, y
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(BackgroundInstance), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribDivisor(1, 1);
-
-    // size (reusing iRadius slot)
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(BackgroundInstance), (void*)8);
-    glEnableVertexAttribArray(2);
-    glVertexAttribDivisor(2, 1);
-
-    // r, g, b
-    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(BackgroundInstance), (void*)12);
-    glEnableVertexAttribArray(3);
-    glVertexAttribDivisor(3, 1);
-
-    glBindVertexArray(0);
-
-    float cellSize = 2.0f / backgroundCount;
-    std::vector<BackgroundInstance> bgInstances;
-    bgInstances.reserve(bgTotal);
-
-    float halfCell = cellSize / 2.0f;
-
-    for (int i = 0; i < backgroundCount; ++i)
-        for (int j = 0; j < backgroundCount; ++j)
-            bgInstances.push_back({
-                background[i][j].x + halfCell, 
-                background[i][j].y + halfCell,
-                cellSize,
-                background[i][j].r,
-                background[i][j].g,
-                background[i][j].b
-            });
-
-    glBindVertexArray(VAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, bgInstanceVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, bgInstances.size() * sizeof(BackgroundInstance), bgInstances.data());
+    displayBackground(background, VAO, bgVAO, bgQuadVBO, bgInstanceVBO, bgTotal);
 
     GLuint circleVBO;
     glGenBuffers(1, &circleVBO);
@@ -436,7 +449,7 @@ int main(void)
     for(int i = 0; i < dropCount; ++i) {
         drops[i] = {(float)dis(gen), 1.0f, 
                     0.0f, 
-                    -0.7f ,
+                    0.0f ,
                     0.005f + ((float)dis(gen)) * 0.001f,
                     1.0f, 1.0f, 1.0f};
     }
@@ -473,7 +486,7 @@ int main(void)
     {
         auto frameStart = std::chrono::high_resolution_clock::now();
 
-        processInput(window);
+        processInput(window, background, VAO, bgVAO, bgQuadVBO, bgInstanceVBO, bgTotal);
 
         /* Render here */
         glClear(GL_COLOR_BUFFER_BIT);
