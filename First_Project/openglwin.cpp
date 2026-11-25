@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <cstdint>
 
-static int dropCount = 20000;
+static int dropCount = 2000;
 static int backgroundCount = 100;
 static float gravityStrength = 0.001f; // Adjust for stronger/weaker gravity
 static float backgroundStrength = 0.001f; // Adjust for stronger/weaker background influence
-static float contrastMultiplier = 50.0f; // Adjust for more/less contrast in background colors
+static float contrastMultiplier = 200.0f; // Adjust for more/less contrast in background colors
 static float neighborInfluenceScale = 0.0003f;
 
 std::random_device rd;
@@ -100,6 +100,9 @@ void assignVeloctyVectors(std::vector<std::vector<rectBackground>> &background, 
 
     float startVelocityScale = 0.003f;
 
+    cell.vx = (float)dis(gen) * startVelocityScale;
+    cell.vy = ((float)dis(gen) ) * startVelocityScale;
+
 
     if (i == 0 && j == 0) {
         cell.vx = (float)dis(gen) * startVelocityScale;
@@ -168,6 +171,34 @@ void assignColors(std::vector<std::vector<rectBackground>> &background, int i, i
     cell.b = (float)b;
 }
 
+struct Drop
+{
+    float x,y;
+    float vx,vy;
+    float radius;
+    float r,g,b;
+};
+
+struct DropInstance
+{
+    float x,y;
+    float radius;
+    float r,g,b;
+};
+
+void assignDropColor(Drop &d) {
+    double r,g,b;
+
+    double speed = sqrt(d.vx * d.vx + d.vy * d.vy);
+    double hue = fmod((atan2(d.vy, d.vx) * 180.0 / 3.14159265) + 360.0, 360.0);
+    double lightness = std::clamp(0.5, 0.0, 1.0); // Adjust multiplier for more/less contrast
+    double saturation = std::clamp(speed*contrastMultiplier, 0.0, 1.0); // Fixed saturation for vibrant colors
+    HLStoRGB(hue, lightness, saturation, r, g, b);
+    d.r = (float)r;
+    d.g = (float)g;
+    d.b = (float)b;
+}
+
 std::vector<std::vector<rectBackground>> getBackground(int count) {
     std::vector<std::vector<rectBackground>> background(count, std::vector<rectBackground>(count));
 
@@ -185,7 +216,7 @@ std::vector<std::vector<rectBackground>> getBackground(int count) {
             blurVelocityVectors(background, i, j);
 
             // Assign Colors 
-            assignColors(background, i, j);
+            // assignColors(background, i, j);
         }
     }
 
@@ -208,25 +239,11 @@ void addGravity(float *vx, float *vy, float time) {
     *vy -= gravityStrength * time;
 }
 
-struct Drop
-{
-    float x,y;
-    float vx,vy;
-    float radius;
-    float r,g,b;
-};
-
-struct DropInstance
-{
-    float x,y;
-    float radius;
-    float r,g,b;
-};
-
 void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, float time)
 {
     addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
     addGravity(&d.vx, &d.vy, time);
+    assignDropColor(d);
 
     d.x += d.vx * time;
     d.y += d.vy * time;
