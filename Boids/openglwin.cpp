@@ -9,7 +9,7 @@
 
 static int dropCount = 2000;
 static int backgroundCount = 100;
-static float gravityStrength = 0.001f; // Adjust for stronger/weaker gravity
+static float gravityStrength = 0.1f; // Adjust for stronger/weaker gravity
 static float backgroundStrength = 0.001f; // Adjust for stronger/weaker background influence
 static float contrastMultiplier = 200.0f; // Adjust for more/less contrast in background colors
 static float neighborInfluenceScale = 0.0003f;
@@ -95,7 +95,7 @@ void HLStoRGB(double h, double l, double s,
     b = HueToRGB(p, q, h - 1.0 / 3.0);
 }
 
-void assignVeloctyVectors(std::vector<std::vector<rectBackground>> &background, int i, int j) {
+void assignVelocityVectors(std::vector<std::vector<rectBackground>> &background, int i, int j) {
     auto &cell = background[i][j];
 
     float startVelocityScale = 0.003f;
@@ -207,7 +207,7 @@ std::vector<std::vector<rectBackground>> getBackground(int count) {
             background[i][j].x  = (float)i / (float)count * 2.0f - 1.0f;
             background[i][j].y  = (float)j / (float)count * 2.0f - 1.0f;
             // Assign Velocity Vectors
-            assignVeloctyVectors(background, i, j);
+            assignVelocityVectors(background, i, j);
         }
     }
 
@@ -241,8 +241,8 @@ void addGravity(float *vx, float *vy, float time) {
 
 void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, float time)
 {
-    addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
-    addGravity(&d.vx, &d.vy, time);
+    // addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
+    // addGravity(&d.vx, &d.vy, time);
     assignDropColor(d);
 
     d.x += d.vx * time;
@@ -464,7 +464,7 @@ int main(void)
     std::vector<Drop> drops(dropCount);
 
     for(int i = 0; i < dropCount; ++i) {
-        drops[i] = {(float)dis(gen), 1.0f, 
+        drops[i] = {(float)dis(gen), (float)dis(gen), 
                     0.0f, 
                     0.0f ,
                     0.005f + ((float)dis(gen)) * 0.001f,
