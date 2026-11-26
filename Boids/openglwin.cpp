@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <cstdint>
 
-static int dropCount = 2000;
+static int neighborInfluence = 5;
+static int dropCount = 100;
 static int backgroundCount = 100;
 static float gravityStrength = 0.1f; // Adjust for stronger/weaker gravity
 static float backgroundStrength = 0.001f; // Adjust for stronger/weaker background influence
 static float contrastMultiplier = 200.0f; // Adjust for more/less contrast in background colors
 static float neighborInfluenceScale = 0.0003f;
+static float dropNeighborInfluenceScale = 0.003f;
 
 std::random_device rd;
 
@@ -186,19 +188,6 @@ struct DropInstance
     float r,g,b;
 };
 
-void assignDropColor(Drop &d) {
-    double r,g,b;
-
-    double speed = sqrt(d.vx * d.vx + d.vy * d.vy);
-    double hue = fmod((atan2(d.vy, d.vx) * 180.0 / 3.14159265) + 360.0, 360.0);
-    double lightness = std::clamp(0.5, 0.0, 1.0); // Adjust multiplier for more/less contrast
-    double saturation = std::clamp(speed*contrastMultiplier, 0.0, 1.0); // Fixed saturation for vibrant colors
-    HLStoRGB(hue, lightness, saturation, r, g, b);
-    d.r = (float)r;
-    d.g = (float)g;
-    d.b = (float)b;
-}
-
 std::vector<std::vector<rectBackground>> getBackground(int count) {
     std::vector<std::vector<rectBackground>> background(count, std::vector<rectBackground>(count));
 
@@ -223,6 +212,18 @@ std::vector<std::vector<rectBackground>> getBackground(int count) {
     return background;
 }
 
+void assignDropColor(Drop &d) {
+    double r,g,b;
+
+    double speed = sqrt(d.vx * d.vx + d.vy * d.vy);
+    double hue = fmod((atan2(d.vy, d.vx) * 180.0 / 3.14159265) + 360.0, 360.0);
+    double lightness = std::clamp(0.5, 0.0, 1.0); // Adjust multiplier for more/less contrast
+    double saturation = std::clamp(speed*contrastMultiplier, 0.0, 1.0); // Fixed saturation for vibrant colors
+    HLStoRGB(hue, lightness, saturation, r, g, b);
+    d.r = (float)r;
+    d.g = (float)g;
+    d.b = (float)b;
+}
 
 void addBackgroundVariation(const std::vector<std::vector<rectBackground>>& background, float *vx, float *vy, float x, float y, int count) {
     int i = (int)floor((x + 1.0f) / 2.0f * count);
@@ -239,21 +240,84 @@ void addGravity(float *vx, float *vy, float time) {
     *vy -= gravityStrength * time;
 }
 
-void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, float time)
+float getDropDistance(Drop d, Drop comp) 
+{
+    return (std::abs(d.x - comp.x) + std::abs(d.y - comp.y));
+}
+
+int partitionDrops(const Drop &d, std::vector<Drop>& drops, int lo, int hi, int pivotIndex) 
+{
+    float pivotDistance = getDropDistance(drops[pivotIndex], d);
+    std::swap(drops[pivotIndex], drops[hi]);
+    int store = lo;
+    for (int i = lo; i < hi; i++) {
+        if (getDropDistance(drops[i], d) < pivotDistance) {
+            std::swap(drops[i], drops[store]);
+            store++;
+        }
+    }
+    std::swap(drops[store], drops[hi]);
+    return store;
+}
+
+void getnClosestDrops(Drop &d, std::vector<Drop>& drops, int n)
+{
+    int pivotIndex;
+    int lo = 0;
+    int hi = drops.size() - 1;
+
+    if (n <= 0 || n > hi) return;
+
+    // Get a random for partition so we aren't causing bad bounds on sorted input
+    std::random_device rd;
+    std::mt19937 gen(rd());
+
+    while (lo <= hi) {
+        std::uniform_int_distribution<int> dist(lo, hi);
+        pivotIndex = dist(gen);
+
+        int p = partitionDrops(d, drops, lo, hi, pivotIndex);
+        if (n == p)     return;
+        else if (n < p) hi = p - 1;
+        else            lo = p + 1;
+    }
+    return;
+}
+
+// NOTE - this function should only be called after getnClosestDrops in order to make sure
+// that the drops are correctly positioned
+void adjustBoidDirection(Drop &d, const std::vector<Drop>& drops, int numDrops, float scaleFactor) 
+{
+    if (numDrops == 0) return;
+
+    float vx = 0.0;
+    float vy = 0.0;
+
+    for (int i = 0; i < numDrops; i++) {
+        Drop dr = drops[i];
+        vx += dr.vx;
+        vy += dr.vy;
+    }
+
+    d.vx += (vx / numDrops) * scaleFactor;
+    d.vy += (vy / numDrops) * scaleFactor;
+}
+
+void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, std::vector<Drop> drops,  float time)
 {
     // addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
     // addGravity(&d.vx, &d.vy, time);
     assignDropColor(d);
+    getnClosestDrops(d, drops, neighborInfluence);
+    adjustBoidDirection(d, drops, neighborInfluence, dropNeighborInfluenceScale);
 
     d.x += d.vx * time;
     d.y += d.vy * time;
 
-    if ((d.x > 1.0f || d.x < -1.0f) || (d.y < -1.0f || d.y > 1.1f)) { 
-        d.vx = 0.0f;
-        d.vy = 0.0f,
-
-        d.x = dis(gen);
-        d.y = 1.0f; 
+    if (d.x > 1.0f || d.x < -1.0f) { 
+        d.x = -d.x;
+    } else if (d.y < -1.0f || d.y > 1.0f) {
+        d.y = -d.y;
     }
 }
 
@@ -465,8 +529,8 @@ int main(void)
 
     for(int i = 0; i < dropCount; ++i) {
         drops[i] = {(float)dis(gen), (float)dis(gen), 
-                    0.0f, 
-                    0.0f ,
+                    (float)dis(gen) * 0.01, 
+                    (float)dis(gen) * 0.01,
                     0.005f + ((float)dis(gen)) * 0.001f,
                     1.0f, 1.0f, 1.0f};
     }
@@ -513,7 +577,7 @@ int main(void)
         lastFrameStart = frameStart;
 
         for (int i = 0; i < dropCount; ++i) {
-            updateDrop(drops[i], background, (float) dt);
+            updateDrop(drops[i], background, drops, (float) dt);
 
             dropInstances[i] = {drops[i].x, drops[i].y, drops[i].radius, drops[i].r, drops[i].g, drops[i].b};
         }
