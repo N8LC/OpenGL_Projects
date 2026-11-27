@@ -7,18 +7,23 @@
 #include <algorithm>
 #include <cstdint>
 
-static int numNeighborsInfluencing = 5;
-static int dropCount = 100;
+static int numNeighborsInfluencing = 25;
+static int dropCount = 300;
 static int backgroundCount = 100;
 static float gravityStrength = 0.1f; // Adjust for stronger/weaker gravity
 static float backgroundStrength = 0.001f; // Adjust for stronger/weaker background influence
 static float contrastMultiplier = 200.0f; // Adjust for more/less contrast in colors
 static float neighborInfluenceScale = 0.0003f;
-static float dropNeighborInfluenceScale = 0.003f;
+
+// This is for BOID alignment
+static float dropNeighborInfluenceScale = 0.01f;
+
+// This is for BOID centering!
+static float centeringFactor = 0.027;
 
 // Maximum and minimum speed for the BOIDS!
-static float maxSpeed = 1.0;
-static float minSpeed = 0.01;
+static float maxSpeed = 0.5;
+static float minSpeed = 0.08;
 
 // SlowDown and SpeedUp coefficients
 // This is for when a BOID goes above max or min speed
@@ -27,10 +32,17 @@ static float speedUp = 0.5;
 
 // This must be between 0-1. It describes how big a bubble the BOID
 // will form around itself
-static float personalBubble = 0.05; 
+static float personalBubble = 0.06; 
+// This is visible range. It describles how big the site bubble is.
+// This value MUST be bigger than personal bubble
+static float visibleBubble = 0.45;
 
 // This describes how much the BOID will avoid being close to its neighbors
-static float neighborResistence = 0.00001; 
+static float neighborResistence = 0.01; 
+
+static float turnFactor = 0.1;
+static float leftMargin = -0.65;
+static float rightMargin = 0.65;
 
 std::random_device rd;
 
@@ -344,7 +356,7 @@ void steerBoidClear(Drop &d, const std::vector<Drop>& drops, float scaleFactor, 
         // is a similar idea
         if (dist < bubbleRange) {
             // This makes it so the closer we get the stronger we resist!
-            inverseDistConst = 1/(dist*dist);
+            inverseDistConst = 1/dist;
 
             vx += (d.x - dr.x) * inverseDistConst;
             vy += (d.y - dr.y) * inverseDistConst;
@@ -359,6 +371,45 @@ void steerBoidClear(Drop &d, const std::vector<Drop>& drops, float scaleFactor, 
     d.vy += (vy / boidCounter) * scaleFactor;
 }
 
+// BOID COHESION
+void centerBoid(Drop &d, const std::vector<Drop>& drops, float centerFactor, float visibleBubbleRange) {
+    float x = 0.0f;
+    float y = 0.0f;
+
+    float dist;
+    float inverseDistConst;
+
+    // Keeps track of how many drops are in the range
+    int boidCounter = 0;
+
+    for (int i = 0; i < drops.size(); i++) {
+        // Check we aren't comparing against our drop!
+        if (drops[i].x == d.x && drops[i].y == d.y) {continue;}
+        const Drop& dr = drops[i];
+
+        dist = getDropDistance(d, dr);
+
+        // Here we need to get a vector 
+        // we are not normalizing it because that is slow
+        // instead we use the inverse distConst which
+        // is a similar idea
+        if (dist < visibleBubbleRange) {
+            x += dr.x;
+            y += dr.y;
+            boidCounter++;
+        }
+    }
+
+    // No divide by zero errors
+    if (boidCounter == 0) {return;}
+
+    float x_av = x/boidCounter;
+    float y_av = y/boidCounter;
+
+    d.vx += (x_av - d.x) * centerFactor;
+    d.vy += (y_av - d.y) * centerFactor;
+}
+
 void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, std::vector<Drop> drops,  float time)
 {
     // addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
@@ -367,15 +418,16 @@ void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& backgro
     getnClosestDrops(d, drops, numNeighborsInfluencing);
     adjustBoidDirection(d, drops, numNeighborsInfluencing, dropNeighborInfluenceScale);
     steerBoidClear(d, drops, neighborResistence, personalBubble);
+    centerBoid(d, drops, centeringFactor, visibleBubble);
 
     d.x += d.vx * time;
     d.y += d.vy * time;
 
-    if (d.x > 1.0f || d.x < -1.0f) { 
-        d.x = -d.x;
-    } else if (d.y < -1.0f || d.y > 1.0f) {
-        d.y = -d.y;
-    }
+    // BOID screen Turning
+    if (d.x < leftMargin)  d.vx += (leftMargin - d.x) * turnFactor;
+    if (d.x > rightMargin) d.vx -= (d.x - rightMargin) * turnFactor;
+    if (d.y < leftMargin)  d.vy += (leftMargin - d.y) * turnFactor;
+    if (d.y > rightMargin) d.vy -= (d.y - rightMargin) * turnFactor;
 
     // Keep BOID in speed range
     float speed = std::sqrt(d.vx * d.vx + d.vy * d.vy);
@@ -389,6 +441,7 @@ void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& backgro
         d.vx *= s;
         d.vy *= s;
     }
+
 }
 
 float vertices[] = {
