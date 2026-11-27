@@ -7,14 +7,30 @@
 #include <algorithm>
 #include <cstdint>
 
-static int neighborInfluence = 5;
+static int numNeighborsInfluencing = 5;
 static int dropCount = 100;
 static int backgroundCount = 100;
 static float gravityStrength = 0.1f; // Adjust for stronger/weaker gravity
 static float backgroundStrength = 0.001f; // Adjust for stronger/weaker background influence
-static float contrastMultiplier = 200.0f; // Adjust for more/less contrast in background colors
+static float contrastMultiplier = 200.0f; // Adjust for more/less contrast in colors
 static float neighborInfluenceScale = 0.0003f;
 static float dropNeighborInfluenceScale = 0.003f;
+
+// Maximum and minimum speed for the BOIDS!
+static float maxSpeed = 1.0;
+static float minSpeed = 0.01;
+
+// SlowDown and SpeedUp coefficients
+// This is for when a BOID goes above max or min speed
+static float slowdown = 0.5;
+static float speedUp = 0.5;
+
+// This must be between 0-1. It describes how big a bubble the BOID
+// will form around itself
+static float personalBubble = 0.05; 
+
+// This describes how much the BOID will avoid being close to its neighbors
+static float neighborResistence = 0.00001; 
 
 std::random_device rd;
 
@@ -286,6 +302,7 @@ void getnClosestDrops(Drop &d, std::vector<Drop>& drops, int n)
 
 // NOTE - this function should only be called after getnClosestDrops in order to make sure
 // that the drops are correctly positioned
+// BOID ALIGNMENT
 void adjustBoidDirection(Drop &d, const std::vector<Drop>& drops, int numDrops, float scaleFactor) 
 {
     if (numDrops == 0) return;
@@ -294,7 +311,7 @@ void adjustBoidDirection(Drop &d, const std::vector<Drop>& drops, int numDrops, 
     float vy = 0.0;
 
     for (int i = 0; i < numDrops; i++) {
-        Drop dr = drops[i];
+        const Drop& dr = drops[i];
         vx += dr.vx;
         vy += dr.vy;
     }
@@ -303,13 +320,53 @@ void adjustBoidDirection(Drop &d, const std::vector<Drop>& drops, int numDrops, 
     d.vy += (vy / numDrops) * scaleFactor;
 }
 
+// BOID SEPARATION
+void steerBoidClear(Drop &d, const std::vector<Drop>& drops, float scaleFactor, float bubbleRange) {
+    float vx = 0.0f;
+    float vy = 0.0f;
+
+    float dist;
+    float inverseDistConst;
+
+    // Keeps track of how many drops are in the range
+    int boidCounter = 0;
+
+    for (int i = 0; i < drops.size(); i++) {
+        // Check we aren't comparing against our drop!
+        if (drops[i].x == d.x) {continue;}
+        const Drop& dr = drops[i];
+
+        dist = getDropDistance(d, dr);
+
+        // Here we need to get a vector 
+        // we are not normalizing it because that is slow
+        // instead we use the inverse distConst which
+        // is a similar idea
+        if (dist < bubbleRange) {
+            // This makes it so the closer we get the stronger we resist!
+            inverseDistConst = 1/(dist*dist);
+
+            vx += (d.x - dr.x) * inverseDistConst;
+            vy += (d.y - dr.y) * inverseDistConst;
+            boidCounter++;
+        }
+    }
+
+    // No divide by zero errors
+    if (boidCounter == 0) {return;}
+
+    d.vx += (vx / boidCounter) * scaleFactor;
+    d.vy += (vy / boidCounter) * scaleFactor;
+}
+
 void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& background, std::vector<Drop> drops,  float time)
 {
     // addBackgroundVariation(background, &d.vx, &d.vy, d.x, d.y, backgroundCount);
     // addGravity(&d.vx, &d.vy, time);
     assignDropColor(d);
-    getnClosestDrops(d, drops, neighborInfluence);
-    adjustBoidDirection(d, drops, neighborInfluence, dropNeighborInfluenceScale);
+    getnClosestDrops(d, drops, numNeighborsInfluencing);
+    adjustBoidDirection(d, drops, numNeighborsInfluencing, dropNeighborInfluenceScale);
+    steerBoidClear(d, drops, neighborResistence, personalBubble);
 
     d.x += d.vx * time;
     d.y += d.vy * time;
@@ -318,6 +375,19 @@ void updateDrop(Drop &d, const std::vector<std::vector<rectBackground>>& backgro
         d.x = -d.x;
     } else if (d.y < -1.0f || d.y > 1.0f) {
         d.y = -d.y;
+    }
+
+    // Keep BOID in speed range
+    float speed = std::sqrt(d.vx * d.vx + d.vy * d.vy);
+
+    if (speed > maxSpeed) {
+        float s = 1.0f - (speed - maxSpeed) / speed * slowdown;
+        d.vx *= s;
+        d.vy *= s;
+    } else if (speed < minSpeed) {
+        float s = 1.0f + (minSpeed - speed) / speed * speedUp;
+        d.vx *= s;
+        d.vy *= s;
     }
 }
 
